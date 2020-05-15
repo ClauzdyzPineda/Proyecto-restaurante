@@ -1,0 +1,147 @@
+
+/*TABLA DE PEDIDOS, MODIFICAR CON CAMPO NUEVO*/
+/*SECCION DE TRIGGERS*/
+
+/*1. Trigger para enviar compras recibidas a la tabla movimientos
+y para actualizar en tabla de pedidos*//**FUNCIONAL :DD*/
+/*drop trigger multi_typ1_state;*/
+DELIMITER $$
+create trigger multi_typ1_state after insert on tbdetalleproducto
+FOR EACH ROW
+BEGIN
+
+	IF (new.id_proveedor > 1) THEN
+		insert into tbmovimiento (monto,cantidad,tipo,fecha,id_sucursal, id_externo)
+		values (new.unidades_recibidas, new.valor_en_inv,1, new.fecha_hora, new.id_sucursal, new.id_detalleProd);
+		
+		set @lastID :=  (select max(id_pedido) as id  from tbpedido where id_producto = new.id_producto
+		order by max(id_pedido) desc  limit 1);
+		
+		UPDATE tbpedido set estado = 'Recibido' where id_producto = new.id_producto 
+		and id_pedido = @lastID;
+			
+		UPDATE tbproducto set existencias = (existencias + new.unidades_recibidas), estado = 'Stock'  where id_producto = new.id_producto;
+    END IF;
+END$$
+DELIMITER ;
+
+    
+/*2. TRIGGER PARA ENVIAR VENTAS A LA TABLA DE MOVIMIENTOS*//*Listo*/
+/*drop trigger InsMovsType0;*/
+create trigger InsMovsType0 after insert on tbventa
+for each row
+	insert into tbmovimiento (monto,cantidad,tipo,fecha,id_sucursal, id_externo)
+    values (new.venta_total, 1, 0, new.fecha_hora, new.id_sucursal, new.id_venta);
+    
+/*3. TRIGGER PARA ACTUALIZAR TABLA DE PRODUCTOS *//*Listo*/
+/*drop trigger status_producto;*/
+DELIMITER $$
+create trigger status_producto after insert on tbpedido
+for each row
+BEGIN
+		UPDATE tbproducto set estado = 'Pdt.Ingreso' where id_producto = new.id_producto;
+END$$
+DELIMITER ;
+    
+/*4. TRIGGER PARA ACTUALIZAR LAS VENTAS EN LA TABLA MOVIMIENTOS*//*Listo*/
+/*drop trigger updaVentMovs;*/
+DELIMITER $$
+create trigger updaVentMovs after update on tbventa
+for each row
+BEGIN
+	set @id := (select id_movimiento from tbmovimiento where id_externo = new.id_venta and tipo = 0);
+	update tbmovimiento set monto = new.venta_total, id_sucursal = new.id_sucursal  where id_movimiento = @id;
+END$$
+DELIMITER ;
+
+/*5. TRIGGER PARA ELIMINAR LA VENTA EN LA TABLA DE MOVIMIENTOS*//*Listo*/
+/*drop trigger delVentMov;*/
+DELIMITER $$
+create trigger delVentMov after delete on tbVenta
+for each row
+BEGIN
+	set @id := (select id_movimiento from tbmovimiento where id_externo = old.id_venta and tipo = 0);
+    delete from tbmovimiento where id_movimiento = @id;
+END $$
+DELIMITER ;
+
+/*6. TRIGGER PARA ACTUALIZAR UNA COMPRA RECIBIDA EN LA TABLA DE MOVIMIENTOS*//*Listo*/
+/*drop trigger updaDetPro;*/
+DELIMITER $$
+create trigger updaDetPro after update on tbdetalleproducto
+for each row
+BEGIN 
+	set @id := (select id_movimiento from tbmovimiento where id_externo = new.id_detalleProd and tipo = 1);
+    update tbmovimiento set monto = new.valor_en_inv, cantidad = new.unidades_recibidas where id_movimiento = @id;    
+END $$
+DELIMITER ;
+
+/*7. TRIGGER PARAR ELIMINAR COMPRA RECIBIDA EN LA TABLA DE MOVIMIENTOS*//*Listo*/
+/*drop trigger delDetPro;*/
+DELIMITER $$
+create trigger delDetPro after delete on tbdetalleproducto
+for each row
+BEGIN
+	set @id := (select id_movimiento from tbmovimiento where id_externo = old.id_detalleProd and tipo = 1);
+	delete from tbmovimiento where id_movimiento = @id;
+    
+    update tbproducto set existencias = (existencias - old.unidades_recibidas) where id_producto = old.id_producto;
+END $$
+DELIMITER ;
+
+
+/*8. TRIGGER QUE NOS MANDA A BEBIDAS O COMPLEMENTOS DEPENDIENDO EL TIPO*//*Listo*/
+/*drop trigger insBebCom;*/
+DELIMITER $$
+CREATE TRIGGER insBebCom after insert on tbproducto
+for each row
+BEGIN
+	IF (new.tipo = 'B') THEN
+		insert into tbbebida (nombre_bebida, id_tipoBebida, precio_bebida, id_referencia)
+        values (new.nombre_producto, 1, new.costo_unitario, new.id_producto);
+		END if;	
+        
+	IF (new.tipo = 'C') then
+		insert into tbcomplemento (nombre_complemento, id_tipoCom, precio_complemento, id_referencia)
+        values (new.nombre_producto, 1, new.costo_unitario, new.id_producto);
+		END IF;        
+END $$ 
+DELIMITER ;
+
+/*9. TRIGGER QUE NOS ACTUALIZA  BEBIDAS O COMPLEMENTOS DEPENDIENDO EL TIPO*//*Listo*/
+/*drop trigger updBebCom;*/
+DELIMITER $$
+CREATE TRIGGER updBebCom after update on tbproducto
+for each row
+BEGIN
+	IF (new.tipo = 'B') THEN
+		set @idref := (select id_bebida from tbbebida where id_referencia = new.id_producto);
+		update tbbebida set nombre_bebida = new.nombre_producto, precio_bebida = new.costo_unitario 
+        where id_bebida = @idref;   
+		END if;	
+        
+	IF (new.tipo = 'C') then
+		set @idref := (select id_complemento from tbcomplemento where id_referencia = new.id_producto);
+		update tbcomplemento set nombre_complemento = new.nombre_producto, precio_complemento = new.costo_unitario 
+        where id_complemento = @idref;
+		END IF;        
+END $$ 
+DELIMITER ;
+
+/*10. TRIGGER QUE RESTA BEBIDAS O COMPLEMENTOS AL INVENTARIO*//*Listo*/
+/*DROP trigger updtInventory;*/
+DELIMITER $$
+CREATE TRIGGER updtInventory AFTER INSERT ON tbdetalleventa
+FOR EACH ROW
+BEGIN	    
+    IF new.id_complemento > 1 THEN
+		set @id := (select id_referencia from tbcomplemento where id_complemento = new.id_complemento);
+		update tbproducto  set existencias = (existencias - 1) where id_producto = @id;
+        END IF;
+	
+    IF NEW.id_bebida > 1 THEN
+		set @id := (select id_referencia from tbbebida where id_bebida = new.id_bebida);
+		update tbproducto  set existencias = (existencias - 1) where id_producto = @id;
+        END IF;
+END $$
+DELIMITER ;
